@@ -234,6 +234,56 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
 
+  # Test the cp314 wheels on fresh machines that never had the build
+  # dependencies, so a library missing from a wheel fails to load instead of
+  # being found on the build host (test_demo6 compiles with the bundled openvaf-r)
+  test-wheels:
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            container: python:3.14
+            name: Linux x86_64
+          - os: ubuntu-24.04-arm
+            container: python:3.14
+            name: Linux aarch64
+          - os: macos-15
+            name: macOS
+          - os: windows-latest
+            name: Windows
+
+    name: Test wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Fetch wheels
+        uses: actions/download-artifact@v6
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse
+
+      - name: Setup Python (macOS, Windows)
+        if: runner.os != 'Linux'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Test wheel
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          if [ -d "$RUNNER_TEMP/venv/Scripts" ]; then BIN="$RUNNER_TEMP/venv/Scripts"; else BIN="$RUNNER_TEMP/venv/bin"; fi
+          "$BIN/python" -m pip install "./$(ls wheelhouse/*-cp314-cp314-*.whl)[dev]"
+          # Run from RUNNER_TEMP so the demos' .raw/.jpg outputs land there
+          cd "$RUNNER_TEMP"
+          MPLBACKEND=Agg "$BIN/python" -m pytest -v "$GITHUB_WORKSPACE/test/test_demo.py"
+
   vacask-bin-tests:
     name: Test vacask-bin packaging
     runs-on: ubuntu-latest
@@ -246,7 +296,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/_')
-    needs: [build, wheels, vacask-bin-tests]
+    needs: [build, wheels, test-wheels, vacask-bin-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
